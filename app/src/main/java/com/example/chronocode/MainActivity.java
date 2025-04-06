@@ -28,7 +28,7 @@ public class MainActivity extends AppCompatActivity {
     private FirebaseUser currentUser;
 
     private Button findBattleButton;
-    private TextView userRatingText; // To display user rating
+    private TextView userRatingText;
 
     private ListenerRegistration matchmakingListener; // To listen for opponent joining
 
