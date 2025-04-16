@@ -94,12 +94,10 @@ public class MainActivity extends AppCompatActivity {
                 if (task.isSuccessful()) {
                     DocumentSnapshot document = task.getResult();
                     if (document != null && !document.exists()) {
-                        // Document does not exist, create it
                         Map<String, Object> newUser = new HashMap<>();
-                        newUser.put("displayName", "User_" + currentUser.getUid().substring(0, 6)); // Or ask user
-                        newUser.put("rating", 1000); // Default rating
+                        newUser.put("displayName", "User_" + currentUser.getUid().substring(0, 6));
+                        newUser.put("rating", 1000);
                         newUser.put("createdAt", new Date());
-
                         userRef.set(newUser)
                                 .addOnSuccessListener(aVoid -> Log.d(TAG, "User profile created for " + currentUser.getUid()))
                                 .addOnFailureListener(e -> Log.w(TAG, "Error creating user profile", e));
@@ -148,7 +146,7 @@ public class MainActivity extends AppCompatActivity {
         findBattleButton.setEnabled(false); // Prevent multiple clicks
         Toast.makeText(this, "Searching for opponent...", Toast.LENGTH_SHORT).show();
 
-        // 1. Query for an existing "waiting" battle room
+        // 1. Query for an existing "waiting" battle room (same as before)
         db.collection("battle_rooms")
                 .whereEqualTo("status", "waiting")
                 .whereNotEqualTo("player1_uid", currentUser.getUid()) // Don't join your own room
@@ -157,19 +155,70 @@ public class MainActivity extends AppCompatActivity {
                 .get()
                 .addOnCompleteListener(task -> {
                     if (task.isSuccessful() && !task.getResult().isEmpty()) {
-                        // Found a waiting room - Join it
+                        // Found a waiting human player - Join it
                         DocumentSnapshot roomSnapshot = task.getResult().getDocuments().get(0);
                         String roomId = roomSnapshot.getId();
                         joinBattleRoom(roomId, roomSnapshot.getString("player1_displayName"));
                     } else if (task.isSuccessful()) {
-                        // No waiting rooms found - Create a new one
-                        createBattleRoom();
+                        // No waiting human players found - Create a game with a bot
+                        startBotBattle();
                     } else {
                         Log.w(TAG, "Error finding battle room.", task.getException());
                         Toast.makeText(this, "Error finding match. Try again.", Toast.LENGTH_SHORT).show();
                         findBattleButton.setEnabled(true);
                     }
                 });
+    }
+
+    private void startBotBattle() {
+        Log.d(TAG, "Starting battle with bot");
+        DocumentReference userRef = db.collection("users").document(currentUser.getUid());
+
+        userRef.get().addOnCompleteListener(userTask -> {
+            if (userTask.isSuccessful()) {
+                DocumentSnapshot userDoc = userTask.getResult();
+                final String myDisplayName;
+
+                if (userDoc != null && userDoc.exists() && userDoc.getString("displayName") != null) {
+                    myDisplayName = userDoc.getString("displayName");
+                } else {
+                    myDisplayName = "Player 1"; // Default
+                    Log.w(TAG, "User document does not exist or missing display name");
+                    createUserProfileIfNotExists();
+                }
+
+                Map<String, Object> newRoom = new HashMap<>();
+                newRoom.put("player1_uid", currentUser.getUid());
+                newRoom.put("player1_displayName", myDisplayName);
+                newRoom.put("player2_uid", "bot_player"); // Use a specific UID for the bot
+                newRoom.put("player2_displayName", "ChronoBot"); // Bot's name
+                newRoom.put("status", "ongoing"); // Start the game immediately
+                newRoom.put("createdAt", new Date());
+                newRoom.put("startTime", new Date());
+                newRoom.put("problemId", getRandomProblemId()); // Get a problem for the bot
+                newRoom.put("player1_score", 0);
+                newRoom.put("player2_score", 0);
+                newRoom.put("isBotMatch", true); // Indicate this is a bot match
+
+                db.collection("battle_rooms")
+                        .add(newRoom)
+                        .addOnSuccessListener(documentReference -> {
+                            String roomId = documentReference.getId();
+                            Log.d(TAG, "Created battle room with bot: " + roomId);
+                            startBattleActivity(roomId, "ChronoBot");
+                        })
+                        .addOnFailureListener(e -> {
+                            Log.w(TAG, "Error creating battle room with bot", e);
+                            Toast.makeText(MainActivity.this, "Error creating match with bot. Try again.", Toast.LENGTH_SHORT).show();
+                            findBattleButton.setEnabled(true);
+                        });
+
+            } else {
+                Log.e(TAG, "Failed to get user document for bot battle", userTask.getException());
+                Toast.makeText(MainActivity.this, "Error creating match with bot. Try again.", Toast.LENGTH_SHORT).show();
+                findBattleButton.setEnabled(true);
+            }
+        });
     }
 
     private void joinBattleRoom(String roomId, String opponentName) {
@@ -213,7 +262,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void createBattleRoom() {
-        Log.d(TAG, "Creating new battle room");
+        Log.d(TAG, "Creating new battle room for human player");
         DocumentReference userRef = db.collection("users").document(currentUser.getUid());
 
         userRef.get().addOnCompleteListener(userTask -> {
@@ -239,6 +288,7 @@ public class MainActivity extends AppCompatActivity {
                 newRoom.put("problemId", getRandomProblemId()); // Use a helper method
                 newRoom.put("player1_score", 0);
                 newRoom.put("player2_score", 0);
+                newRoom.put("isBotMatch", false); // Indicate this is not a bot match
 
                 db.collection("battle_rooms")
                         .add(newRoom) // Firestore generates a unique ID
@@ -271,11 +321,6 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void listenForOpponent(String roomId, final String myName) {
-        // Remove previous listener if any
-        if (matchmakingListener != null) {
-            matchmakingListener.remove();
-        }
-
         DocumentReference roomRef = db.collection("battle_rooms").document(roomId);
         matchmakingListener = roomRef.addSnapshotListener((snapshot, e) -> {
             if (e != null) {
